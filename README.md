@@ -16,3 +16,7 @@ Nécessite macOS 13+ et les outils en ligne de commande Xcode (`swiftc`).
 Clique sur « Changer l'adresse MAC » et entre ton mot de passe administrateur. Le Wi-Fi se coupe brièvement puis se reconnecte.
 
 Si macOS garde son adresse privée, désactive « Adresse Wi-Fi privée » dans les réglages du réseau Wi-Fi.
+
+## Licence
+
+MIT — voir [LICENSE](LICENSE).
