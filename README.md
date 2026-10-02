@@ -1,22 +1,22 @@
 # MacChanger
 
-Petite app macOS qui change l'adresse MAC Wi-Fi (`en0`) en une adresse aléatoire, en un clic.
+A tiny macOS app that changes your Wi-Fi (`en0`) MAC address to a random one, in one click.
 
-## Compiler
+## Build
 
 ```sh
 ./build.sh
 open MacChanger.app
 ```
 
-Nécessite macOS 13+ et les outils en ligne de commande Xcode (`swiftc`).
+Requires macOS 13+ and the Xcode command line tools (`swiftc`).
 
-## Utilisation
+## Usage
 
-Clique sur « Changer l'adresse MAC » et entre ton mot de passe administrateur. Le Wi-Fi se coupe brièvement puis se reconnecte.
+Click "Changer l'adresse MAC" (Change MAC address) and enter your administrator password. Wi-Fi turns off briefly, then reconnects.
 
-Si macOS garde son adresse privée, désactive « Adresse Wi-Fi privée » dans les réglages du réseau Wi-Fi.
+If macOS keeps its own private address, turn off "Private Wi-Fi Address" in the Wi-Fi network's settings.
 
-## Licence
+## License
 
-MIT — voir [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
