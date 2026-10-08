@@ -119,7 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 result = run("/usr/bin/osascript",
                              ["-e", "do shell script \"\(installer) && \(helperPath) \(newMAC)\" with administrator privileges"])
             }
-            let (status, finalMAC, error) = result ?? (1, "", "installation impossible")
+            let (status, output, error) = result ?? (1, "", "installation impossible")
+            // Seule la dernière adresse MAC de la sortie compte (osascript sépare les lignes par \r).
+            let finalMAC = output.components(separatedBy: .whitespacesAndNewlines)
+                .last { $0.range(of: "^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$", options: .regularExpression) != nil } ?? output
 
             DispatchQueue.main.async { [self] in
                 button.isEnabled = true
@@ -190,7 +193,7 @@ func prepareHelper() -> String? {
     } catch { return nil }
     return "install -d -o root -g wheel -m 755 /Library/PrivilegedHelperTools"
         + " && install -o root -g wheel -m 755 '\(helper.path)' \(helperPath)"
-        + " && visudo -cf '\(sudoers.path)' && install -o root -g wheel -m 440 '\(sudoers.path)' /etc/sudoers.d/macchanger"
+        + " && visudo -cf '\(sudoers.path)' >/dev/null && install -o root -g wheel -m 440 '\(sudoers.path)' /etc/sudoers.d/macchanger"
         + " && rm -rf '\(dir.path)'"
 }
 
