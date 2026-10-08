@@ -23,7 +23,10 @@ MIT — see [LICENSE](LICENSE).
 
 ## Wi-Fi credit monitor
 
-In the app, tick "Surveiller les crédits (NormandieTrainConnecte)". Every 10 seconds the app reads the remaining credits on the captive portal (`wifi.normandie.fr`). When they run out, it changes the MAC address (asking for your password) and opens the portal so you can accept the cookies and the terms of use again. A copy of the portal page is saved to `~/Library/Logs/MacChanger/portal.html`.
+In the app, tick "Surveiller les crédits (NormandieTrainConnecte)". Every 10 seconds the app reads the remaining credits (percentage and megabytes left) from the captive portal API (`wifi.normandie.fr`). If the current address has no data plan yet, it simply accepts the terms of use to get one. When they run out, it changes the MAC address, rejoins the network and accepts the cookies and the terms of use again by itself. The portal only opens in your browser if that automatic step fails.
+
+The first MAC change asks for your administrator password once: it installs a small root tool (`/Library/PrivilegedHelperTools/local.macchanger.rotate`) and a sudo rule (`/etc/sudoers.d/macchanger`) so later changes need no password. To remove them: `sudo rm /Library/PrivilegedHelperTools/local.macchanger.rotate /etc/sudoers.d/macchanger`.
+ A copy of the portal page is saved to `~/Library/Logs/MacChanger/portal.html`.
 
 The remaining credits are also shown in the macOS menu bar (`–` when unknown). Its menu lets you reopen the window, change the MAC address, check the credits right away, or quit. Closing the window keeps the app running in the menu bar.
 

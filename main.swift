@@ -25,7 +25,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }()
     var timer: Timer?
     var checking = false
-    var wasOnline = false
     var lastChange = Date.distantPast
     // Le portail est une application JavaScript : on le charge dans un navigateur invisible
     // pour lire les crédits et accepter les CGU comme le ferait un humain.
@@ -109,40 +108,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func changeMAC(completion: ((Bool) -> Void)?) {
         let newMAC = randomMAC()
-        // Le Wi-Fi doit être déconnecté pour accepter une nouvelle adresse :
-        // on l'applique Wi-Fi éteint, sinon juste après le rallumage, avant qu'il ne se reconnecte.
-        // On attend ensuite la reconnexion, puis on renvoie l'adresse finale (lisible seulement en root).
-        let script = """
-        networksetup -setairportpower en0 off; ifconfig en0 ether \(newMAC) 2>/dev/null; \
-        networksetup -setairportpower en0 on; sleep 1; \
-        if ! ifconfig en0 | grep -qi 'ether \(newMAC)'; then \
-        networksetup -setairportpower en0 off; networksetup -setairportpower en0 on; \
-        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
-        ifconfig en0 ether \(newMAC) 2>/dev/null; \
-        ifconfig en0 | grep -qi 'ether \(newMAC)' && break; sleep 0.2; done; fi; \
-        sleep 12; ifconfig en0 | awk '/ether/{print $2}'
-        """
         button.isEnabled = false
         statusLabel.stringValue = "Changement en cours…"
+        let installed = (try? String(contentsOfFile: helperPath, encoding: .utf8)) == helperScript
 
         DispatchQueue.global().async {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            p.arguments = ["-e", "do shell script \"\(script)\" with administrator privileges"]
-            let out = Pipe(), err = Pipe()
-            p.standardOutput = out
-            p.standardError = err
-            try? p.run()
-            p.waitUntilExit()
-            let finalMAC = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let error = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            // Sans mot de passe une fois l'outil installé ; sinon une seule demande pour l'installer.
+            var result = installed ? run("/usr/bin/sudo", ["-n", helperPath, newMAC]) : nil
+            if result?.status != 0, let installer = prepareHelper() {
+                result = run("/usr/bin/osascript",
+                             ["-e", "do shell script \"\(installer) && \(helperPath) \(newMAC)\" with administrator privileges"])
+            }
+            let (status, finalMAC, error) = result ?? (1, "", "installation impossible")
 
             DispatchQueue.main.async { [self] in
                 button.isEnabled = true
-                completion?(p.terminationStatus == 0)
-                if p.terminationStatus != 0 {
-                    statusLabel.stringValue = "Échec : \(error.trimmingCharacters(in: .whitespacesAndNewlines))"
+                log("changement d'adresse → \(status == 0 ? finalMAC : error)")
+                completion?(status == 0)
+                if status != 0 {
+                    statusLabel.stringValue = "Échec : \(error)"
                     return
                 }
                 macLabel.stringValue = finalMAC
@@ -152,6 +136,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+}
+
+let helperPath = "/Library/PrivilegedHelperTools/local.macchanger.rotate"
+
+// Outil installé en root : change l'adresse MAC Wi-Fi puis rejoint le même réseau. Une règle sudo
+// permet à l'utilisateur de le lancer sans mot de passe, pour que la rotation soit automatique.
+let helperScript = #"""
+#!/bin/sh
+# Installé par MacChanger. Usage : sudo local.macchanger.rotate aa:bb:cc:dd:ee:ff
+IFACE=en0
+MAC="$1"
+echo "$MAC" | grep -Eq '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || { echo "adresse invalide" >&2; exit 2; }
+SSID=$(ipconfig getsummary $IFACE 2>/dev/null | awk -F' : ' '/ SSID : /{print $2; exit}')
+has_mac() { ifconfig $IFACE | grep -qi "ether $MAC"; }
+has_ip() { ipconfig getifaddr $IFACE >/dev/null 2>&1; }
+
+# Le Wi-Fi doit être déconnecté pour accepter une nouvelle adresse : on l'applique Wi-Fi éteint,
+# sinon juste après le rallumage, avant qu'il ne se reconnecte.
+networksetup -setairportpower $IFACE off
+ifconfig $IFACE ether "$MAC" 2>/dev/null
+networksetup -setairportpower $IFACE on
+sleep 1
+if ! has_mac; then
+    networksetup -setairportpower $IFACE off
+    networksetup -setairportpower $IFACE on
+    for i in $(seq 20); do
+        ifconfig $IFACE ether "$MAC" 2>/dev/null
+        has_mac && break
+        sleep 0.2
+    done
+fi
+
+# Attend une adresse IP ; si macOS ne rejoint pas le réseau tout seul, on le rejoint explicitement.
+for i in $(seq 15); do has_ip && break; sleep 1; done
+if ! has_ip && [ -n "$SSID" ]; then
+    networksetup -setairportnetwork $IFACE "$SSID" >/dev/null 2>&1
+    for i in $(seq 20); do has_ip && break; sleep 1; done
+fi
+ifconfig $IFACE | awk '/ether/{print $2}'
+"""#
+
+// Prépare l'outil et sa règle sudo dans un dossier temporaire privé, et renvoie
+// la commande (à lancer en administrateur) qui les installe.
+func prepareHelper() -> String? {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("macchanger-\(UUID().uuidString)")
+    let helper = dir.appendingPathComponent("helper"), sudoers = dir.appendingPathComponent("sudoers")
+    do {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try helperScript.write(to: helper, atomically: true, encoding: .utf8)
+        try "\(NSUserName()) ALL=(root) NOPASSWD: \(helperPath)\n".write(to: sudoers, atomically: true, encoding: .utf8)
+    } catch { return nil }
+    return "install -d -o root -g wheel -m 755 /Library/PrivilegedHelperTools"
+        + " && install -o root -g wheel -m 755 '\(helper.path)' \(helperPath)"
+        + " && visudo -cf '\(sudoers.path)' && install -o root -g wheel -m 440 '\(sudoers.path)' /etc/sudoers.d/macchanger"
+        + " && rm -rf '\(dir.path)'"
+}
+
+// Lance une commande et renvoie son code de sortie, sa sortie et ses erreurs.
+func run(_ tool: String, _ arguments: [String]) -> (status: Int32, out: String, err: String) {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: tool)
+    p.arguments = arguments
+    let out = Pipe(), err = Pipe()
+    p.standardOutput = out
+    p.standardError = err
+    do { try p.run() } catch { return (1, "", error.localizedDescription) }
+    let output = out.fileHandleForReading.readDataToEndOfFile()
+    let errors = err.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return (p.terminationStatus,
+            String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines),
+            String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
 }
 
 extension AppDelegate {
@@ -184,25 +241,34 @@ extension AppDelegate {
                 showCredits(nil)
                 return
             }
-            let credits = await readCredits()
+            let status = await readCredits()
+            let credits = status.percent
             let time = Date().formatted(date: .omitted, time: .shortened)
-            let shown = credits.map { "\($0) %" } ?? "inconnus"
+            let shown = status.description
             showCredits(credits)
 
-            if online {
-                wasOnline = true
-                creditsLabel.stringValue = "\(time) — en ligne, crédits : \(shown)"
-                if let c = credits, c <= 0 { await rotate() }
-            } else if let c = credits, c <= 0 {
+            switch status {
+            case .noGrant:
+                // Aucun forfait pour cette adresse : il suffit d'accepter les CGU pour en obtenir un.
+                creditsLabel.stringValue = "\(time) — aucun forfait actif, acceptation des CGU…"
+                creditsLabel.stringValue = await acceptPortal()
+                    ? "\(time) — conditions acceptées ✓"
+                    : "\(time) — accepte les CGU du portail"
+            case .left(percent: 0, _):
                 await rotate()
-            } else if await acceptPortal() {
-                wasOnline = true
-                creditsLabel.stringValue = "\(time) — conditions acceptées ✓, crédits : \(shown)"
-            } else if wasOnline {
-                // Internet coupé après avoir marché et le portail refuse : sûrement plus de crédits.
-                await rotate()
-            } else {
-                creditsLabel.stringValue = "\(time) — hors ligne : accepte les CGU du portail"
+            case .left:
+                // Forfait actif mais Internet coupé : simple coupure du réseau du train (tunnel…).
+                creditsLabel.stringValue = online
+                    ? "\(time) — en ligne, crédits : \(shown)"
+                    : "\(time) — réseau du train coupé, crédits : \(shown)"
+            case .unknown:
+                if online {
+                    creditsLabel.stringValue = "\(time) — en ligne, crédits inconnus"
+                } else {
+                    creditsLabel.stringValue = await acceptPortal()
+                        ? "\(time) — conditions acceptées ✓"
+                        : "\(time) — hors ligne : accepte les CGU du portail"
+                }
             }
         }
     }
@@ -211,16 +277,14 @@ extension AppDelegate {
         // Évite d'enchaîner les changements pendant que le portail se met à jour.
         guard Date().timeIntervalSince(lastChange) > 120 else { return }
         lastChange = Date()
-        wasOnline = false
         creditsLabel.stringValue = "Crédits épuisés → nouvelle adresse MAC…"
         showCredits(nil, text: "…")
         let ok = await withCheckedContinuation { c in changeMAC { c.resume(returning: $0) } }
         guard ok else { return }
         creditsLabel.stringValue = "Acceptation des conditions du portail…"
         if await acceptPortal() {
-            wasOnline = true
             creditsLabel.stringValue = "Nouvelle adresse, conditions acceptées ✓"
-            showCredits(100)
+            showCredits(await fetchStatus()?.percent ?? 100)
         } else {
             creditsLabel.stringValue = "Accepte les conditions du portail pour retrouver 100 %"
             showCredits(nil, text: "!")
@@ -232,6 +296,7 @@ extension AppDelegate {
     // Coche « J'accepte les CGU » puis clique « Se connecter » (et accepte les cookies s'ils sont demandés).
     func acceptPortal() async -> Bool {
         await load(portal.appending(path: "fr/home"))
+        var noForm = 0
         for _ in 0..<20 {
             let state = await js("""
                 (() => {
@@ -248,29 +313,61 @@ extension AppDelegate {
                 })()
                 """) as? String ?? "error"
             log("portail : \(state)")
-            if state == "submitted" || state == "no-form" {
-                try? await Task.sleep(for: .seconds(4))
-                if await fetch(captive)?.contains("Success") == true { return true }
+            switch state {
+            case "submitted":
+                // Le forfait peut mettre une vingtaine de secondes à apparaître.
+                if await waitForCredits(seconds: 25) { return true }
+            case "no-form":
+                // Formulaire absent : soit c'est déjà bon, soit la page est restée sur un autre écran.
+                if await waitForCredits(seconds: 2) { return true }
+                noForm += 1
+                if noForm % 3 == 0 { await load(portal.appending(path: "fr/home")) }
+            default:
+                break
             }
             try? await Task.sleep(for: .seconds(1))
         }
         return false
     }
 
+    // Attend que l'API annonce un forfait avec des crédits.
+    func waitForCredits(seconds: Int) async -> Bool {
+        let deadline = Date().addingTimeInterval(TimeInterval(seconds))
+        repeat {
+            if let p = await fetchStatus()?.percent, p > 0 { return true }
+            try? await Task.sleep(for: .seconds(2))
+        } while Date() < deadline
+        return false
+    }
+
+    // État du forfait d'après l'API du portail, qui reconnaît l'appareil à son adresse IP.
+    func fetchStatus() async -> Credits? {
+        guard let body = await fetch(portal.appending(path: "router/api/connection/status")) else { return nil }
+        let credits = parseStatus(body)
+        if let credits { saveText("API → \(credits.description)\n\n\(body)") }
+        return credits
+    }
+
     // Lit le pourcentage de crédits affiché dans l'en-tête du portail. La page reste ouverte
     // entre deux lectures : le portail met l'indicateur à jour tout seul.
-    func readCredits() async -> Int? {
+    func readCredits() async -> Credits {
+        // L'API reconnaît l'appareil à son adresse IP : un appel direct suffit, sans charger la page.
+        if let credits = await fetchStatus() { return credits }
         if web.url?.host?.contains("normandie") != true || web.url?.path.hasPrefix("/fr/home") != true {
             await load(portal.appending(path: "fr/home"))
         }
         // Source principale : l'API que la page interroge elle-même.
         var raw: [String] = []
-        for path in ["/router/api/connection/status", "/router/api/connection/statistics"] {
-            if let body = await api(path) { raw.append("\(path)\n\(body)") }
-        }
-        if let c = creditsFromJSON(raw.map { String($0.drop(while: { $0 != "\n" })) }) {
-            saveText("API → \(c) %\n\n" + raw.joined(separator: "\n\n"))
-            return c
+        if let body = await api("/router/api/connection/status") {
+            raw.append("/router/api/connection/status\n\(body)")
+            if let credits = parseStatus(body) {
+                saveText("API → \(credits.description)\n\n\(body)")
+                return credits
+            }
+            if let c = creditsFromJSON([body]) {
+                saveText("API → \(c) %\n\n\(body)")
+                return .left(percent: c, megabytes: nil)
+            }
         }
         log("API sans pourcentage reconnu : \(raw.joined(separator: " | ").prefix(500))")
         for _ in 0..<5 {
@@ -283,7 +380,7 @@ extension AppDelegate {
                 """) as? String
             if let c = indicator.flatMap(firstNumber) {
                 saveText("Indicateur : \(indicator ?? "")")
-                return c
+                return .left(percent: c, megabytes: nil)
             }
             try? await Task.sleep(for: .seconds(1))
         }
@@ -300,7 +397,7 @@ extension AppDelegate {
         saveText("Indicateur introuvable\n\n" + raw.joined(separator: "\n\n") + "\n\n\(diagnostic ?? "diagnostic impossible")")
         // Au prochain passage, on repart d'une page fraîche.
         web.load(URLRequest(url: URL(string: "about:blank")!))
-        return nil
+        return .unknown
     }
 
     func load(_ url: URL) async {
@@ -363,6 +460,42 @@ extension AppDelegate {
             try? entry.write(to: file)
         }
     }
+}
+
+enum Credits: CustomStringConvertible {
+    case left(percent: Int, megabytes: Int?)
+    case noGrant
+    case unknown
+
+    var percent: Int? {
+        if case .left(let percent, _) = self { return percent }
+        return nil
+    }
+
+    var description: String {
+        switch self {
+        case .left(let percent, let mb?): "\(percent) % (\(mb) Mo)"
+        case .left(let percent, nil): "\(percent) %"
+        case .noGrant: "aucun forfait actif"
+        case .unknown: "inconnus"
+        }
+    }
+}
+
+// Réponse de /router/api/connection/status, précédée de son code HTTP. Le forfait vaut
+// remaining_data + consumed_data (en Kio, 150 Mio par connexion) ; sans forfait, l'API répond
+// « … does not have any active grants ».
+func parseStatus(_ response: String) -> Credits? {
+    let json = response.drop(while: { $0 != "{" })
+    guard let data = json.data(using: .utf8),
+          let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    if (status["status_description"] as? String)?.contains("does not have any") == true { return .noGrant }
+    guard let remaining = (status["remaining_data"] as? NSNumber)?.doubleValue,
+          let consumed = (status["consumed_data"] as? NSNumber)?.doubleValue,
+          remaining + consumed > 0 else { return nil }
+    // 0 % seulement quand il ne reste vraiment plus rien.
+    let percent = remaining <= 0 ? 0 : min(100, max(1, Int((remaining / (remaining + consumed) * 100).rounded())))
+    return .left(percent: percent, megabytes: Int(max(0, remaining) / 1024))
 }
 
 // Pourcentage de crédit restant dans les réponses JSON de l'API, quel que soit le nom exact des champs.
