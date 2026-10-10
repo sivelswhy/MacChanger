@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag de la release (ex. v1.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: UNIVERSAL=1 VERSION="${TAG#v}" ./build.sh
+
+      - name: Sign (ad-hoc)
+        run: |
+          xattr -cr MacChanger.app
+          codesign --force --sign - MacChanger.app
+
+      - name: Package
+        run: ditto -c -k --keepParent MacChanger.app MacChanger.zip
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" MacChanger.zip wifi-monitor.sh \
+            --target "$GITHUB_SHA" --title "$TAG" --generate-notes

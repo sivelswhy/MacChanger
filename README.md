@@ -11,6 +11,18 @@ open MacChanger.app
 
 Requires macOS 13+ and the Xcode command line tools (`swiftc`).
 
+The app icon is drawn by `icon/make-icon.swift`; run `swift icon/make-icon.swift` to regenerate `icon/AppIcon.icns`.
+
+Or download `MacChanger.zip` from the [Releases](https://github.com/sivelswhy/MacChanger/releases) page. The app is not notarized, so on first launch right-click it and choose "Open", or run `xattr -cr MacChanger.app`.
+
+### Releases
+
+Pushing a `v*` tag builds a universal (Apple Silicon + Intel) app on GitHub Actions and publishes it as a release:
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0
+```
+
 ## Usage
 
 Click "Changer l'adresse MAC" (Change MAC address) and enter your administrator password. Wi-Fi turns off briefly, then reconnects.
