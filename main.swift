@@ -1,10 +1,12 @@
 import AppKit
+import SwiftUI
 import WebKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 240),
-                          styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 820),
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                          backing: .buffered, defer: false)
     // macOS masque l'adresse MAC aux applications (02:00:00:00:00:00) : on ne l'affiche qu'après un changement.
     let macLabel = NSTextField(labelWithString: "—")
     let statusLabel = NSTextField(labelWithString: "")
@@ -13,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let creditsLabel = NSTextField(labelWithString: "")
     // Crédits restants affichés dans la barre des menus.
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let tabs = TabSelection()
 
     // Surveillance : quand les crédits du portail tombent à 0, on change d'adresse pour repartir à 100 %.
     let portal = URL(string: "http://wifi.normandie.fr")!
@@ -49,15 +52,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let stack = NSStackView(views: [NSTextField(labelWithString: "Adresse MAC Wi-Fi (en0)"), macLabel, button, statusLabel,
                                         monitorBox, creditsLabel])
         stack.orientation = .vertical
+        stack.alignment = .leading
         stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
 
         setupStatusItem()
 
-        window.title = "MacChanger"
+        window.title = "Hippocampe"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.minSize = NSSize(width: 900, height: 640)
         window.isReleasedWhenClosed = false
-        window.contentView = stack
-        stack.addSubview(web, positioned: .below, relativeTo: nil)
+        // Interface à onglets et planètes ; le panneau Wi-Fi ci-dessus en est le premier onglet.
+        // Le navigateur invisible reste dans la fenêtre quel que soit l'onglet affiché.
+        let hosting = NSHostingView(rootView: RootView(tabs: tabs, wifiPanel: stack))
+        let container = NSView()
+        hosting.frame = container.bounds
+        hosting.autoresizingMask = [.width, .height]
+        container.addSubview(web)
+        container.addSubview(hosting)
+        window.contentView = container
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -66,6 +80,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // L'app reste active dans la barre des menus quand la fenêtre est fermée.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    // Rend AirDrop et AirPlay si le Wi-Fi faible latence était actif.
+    func applicationWillTerminate(_ notification: Notification) { OptimizeModel.shared.restoreOnQuit() }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showWindow()
         return true
@@ -73,12 +90,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func setupStatusItem() {
         statusItem.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .medium)
-        statusItem.button?.toolTip = "MacChanger — crédits Wi-Fi restants"
+        statusItem.button?.toolTip = "Hippocampe — crédits Wi-Fi restants"
         showCredits(nil)
         let menu = NSMenu()
-        menu.addItem(withTitle: "Afficher MacChanger", action: #selector(showWindow), keyEquivalent: "")
+        menu.addItem(withTitle: "Afficher Hippocampe", action: #selector(showWindow), keyEquivalent: "")
         menu.addItem(withTitle: "Changer l'adresse MAC", action: #selector(change), keyEquivalent: "")
         menu.addItem(withTitle: "Vérifier les crédits maintenant", action: #selector(checkNow), keyEquivalent: "")
+        menu.addItem(.separator())
+        for tab in AppTab.allCases {
+            let item = menu.addItem(withTitle: tab.title, action: #selector(openTab(_:)), keyEquivalent: "")
+            item.representedObject = tab.rawValue
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quitter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) { item.target = self }
@@ -93,6 +115,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showWindow() {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc func openTab(_ sender: NSMenuItem) {
+        if let tab = (sender.representedObject as? String).flatMap(AppTab.init(rawValue:)) { tabs.selected = tab }
+        showWindow()
     }
 
     @objc func checkNow() {
@@ -110,16 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let newMAC = randomMAC()
         button.isEnabled = false
         statusLabel.stringValue = "Changement en cours…"
-        let installed = (try? String(contentsOfFile: helperPath, encoding: .utf8)) == helperScript
 
         DispatchQueue.global().async {
-            // Sans mot de passe une fois l'outil installé ; sinon une seule demande pour l'installer.
-            var result = installed ? run("/usr/bin/sudo", ["-n", helperPath, newMAC]) : nil
-            if result?.status != 0, let installer = prepareHelper() {
-                result = run("/usr/bin/osascript",
-                             ["-e", "do shell script \"\(installer) && \(helperPath) \(newMAC)\" with administrator privileges"])
-            }
-            let (status, output, error) = result ?? (1, "", "installation impossible")
+            let (status, output, error) = runHelper([newMAC])
             // Seule la dernière adresse MAC de la sortie compte (osascript sépare les lignes par \r).
             let finalMAC = output.components(separatedBy: .whitespacesAndNewlines)
                 .last { $0.range(of: "^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$", options: .regularExpression) != nil } ?? output
@@ -148,6 +168,28 @@ let helperPath = "/Library/PrivilegedHelperTools/local.macchanger.rotate"
 let helperScript = #"""
 #!/bin/sh
 # Installé par MacChanger. Usage : sudo local.macchanger.rotate aa:bb:cc:dd:ee:ff
+#                                  | flush-dns | purge | awdl up|down
+#                                  | daemon-on|daemon-off <label> <fichier.plist>
+# Comme mole-admin, seules ces opérations sont acceptées, et leurs arguments sont vérifiés.
+case "$1" in
+    flush-dns) /usr/bin/dscacheutil -flushcache; /usr/bin/killall -HUP mDNSResponder 2>/dev/null; exit 0 ;;
+    purge) exec /usr/sbin/purge ;;
+    awdl)
+        case "$2" in up|down) exec /sbin/ifconfig awdl0 "$2" ;; esac
+        echo "valeur invalide : $2" >&2; exit 2 ;;
+    daemon-on|daemon-off)
+        # Seulement un service tiers installé dans /Library/LaunchDaemons, dont le fichier porte ce nom.
+        echo "$2" | grep -Eq '^[A-Za-z0-9._-]+$' || { echo "nom invalide" >&2; exit 2; }
+        echo "$3" | grep -Eq '^[A-Za-z0-9._-]+[.]plist$' || { echo "fichier invalide" >&2; exit 2; }
+        case "$2" in com.apple.*) echo "service Apple refusé" >&2; exit 2 ;; esac
+        PLIST="/Library/LaunchDaemons/$3"
+        [ -f "$PLIST" ] && [ ! -L "$PLIST" ] || { echo "service introuvable" >&2; exit 2; }
+        [ "$(/usr/libexec/PlistBuddy -c 'Print :Label' "$PLIST" 2>/dev/null)" = "$2" ] || { echo "nom différent" >&2; exit 2; }
+        if [ "$1" = daemon-off ]; then
+            /bin/launchctl disable "system/$2"; /bin/launchctl bootout "system/$2" 2>/dev/null; exit 0
+        fi
+        /bin/launchctl enable "system/$2"; /bin/launchctl bootstrap system "$PLIST" 2>/dev/null; exit 0 ;;
+esac
 IFACE=en0
 MAC="$1"
 echo "$MAC" | grep -Eq '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || { echo "adresse invalide" >&2; exit 2; }
@@ -179,6 +221,43 @@ if ! has_ip && [ -n "$SSID" ]; then
 fi
 ifconfig $IFACE | awk '/ether/{print $2}'
 """#
+
+// Lance l'outil root : sans mot de passe une fois installé ; sinon une seule demande pour l'installer.
+// À appeler hors du thread principal.
+func runHelper(_ arguments: [String]) -> (status: Int32, out: String, err: String) {
+    var result = helperTrusted() ? run("/usr/bin/sudo", ["-n", helperPath] + arguments) : nil
+    // On ne réinstalle que si sudo a refusé de lancer l'outil : un échec de l'opération
+    // elle-même (Wi-Fi récalcitrant…) ne redemande pas le mot de passe.
+    if result.map({ $0.status != 0 && sudoRefused($0.err) }) ?? true {
+        result = prepareHelper().map { installer in
+            let command = ([helperPath] + arguments).joined(separator: " ")
+            var r = run("/usr/bin/osascript",
+                        ["-e", "do shell script \"\(installer) && \(command)\" with administrator privileges"])
+            if r.status != 0, r.err.contains("(-128)") { r.err = "accès administrateur refusé" }
+            return r
+        }
+    }
+    return result ?? (1, "", "installation impossible")
+}
+
+// La règle NOPASSWD lance cet outil en root : il n'est utilisé que s'il est identique à celui
+// de l'app, appartient à root:wheel et n'est modifiable par aucun autre compte (sinon n'importe
+// quel programme pourrait le remplacer et obtenir root). Même vérification que Mole avant sudo.
+func helperTrusted() -> Bool {
+    guard let a = try? FileManager.default.attributesOfItem(atPath: helperPath),
+          a[.type] as? FileAttributeType == .typeRegular,
+          (a[.ownerAccountID] as? NSNumber)?.intValue == 0,
+          (a[.groupOwnerAccountID] as? NSNumber)?.intValue == 0,
+          let mode = (a[.posixPermissions] as? NSNumber)?.intValue, mode & 0o022 == 0 else { return false }
+    return (try? String(contentsOfFile: helperPath, encoding: .utf8)) == helperScript
+}
+
+// sudo -n a refusé de lancer l'outil (règle absente ou mot de passe demandé),
+// par opposition à un échec de l'outil lui-même.
+func sudoRefused(_ error: String) -> Bool {
+    ["a password is required", "is not in the sudoers file", "not allowed to execute", "authentication is required"]
+        .contains { error.localizedCaseInsensitiveContains($0) }
+}
 
 // Prépare l'outil et sa règle sudo dans un dossier temporaire privé, et renvoie
 // la commande (à lancer en administrateur) qui les installe.

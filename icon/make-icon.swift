@@ -2,10 +2,33 @@
 // Run: swift icon/make-icon.swift
 import AppKit
 
+// Point d'une courbe de Catmull-Rom passant par p1 et p2.
+func catmull(_ p0: CGPoint, _ p1: CGPoint, _ p2: CGPoint, _ p3: CGPoint, _ t: CGFloat) -> CGPoint {
+    let t2 = t * t, t3 = t2 * t
+    func f(_ a: CGFloat, _ b: CGFloat, _ c: CGFloat, _ d: CGFloat) -> CGFloat {
+        0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3)
+    }
+    return CGPoint(x: f(p0.x, p1.x, p2.x, p3.x), y: f(p0.y, p1.y, p2.y, p3.y))
+}
+
+// Tube lisse : des disques posés le long d'une courbe, dont le rayon varie d'un point à l'autre.
+func tube(_ ctx: CGContext, _ pts: [(CGFloat, CGFloat, CGFloat)]) {
+    let p = pts.map { CGPoint(x: $0.0, y: $0.1) }
+    for i in 0..<(p.count - 1) {
+        let p0 = p[max(0, i - 1)], p3 = p[min(p.count - 1, i + 2)]
+        for step in 0...40 {
+            let t = CGFloat(step) / 40
+            let c = catmull(p0, p[i], p[i + 1], p3, t)
+            let r = pts[i].2 + (pts[i + 1].2 - pts[i].2) * t
+            ctx.fillEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+        }
+    }
+}
+
 func draw(_ ctx: CGContext) {
-    let s: CGFloat = 1024
     let tile = CGRect(x: 100, y: 100, width: 824, height: 824)
     let shape = CGPath(roundedRect: tile, cornerWidth: 185, cornerHeight: 185, transform: nil)
+    let space = CGColorSpaceCreateDeviceRGB()
 
     // Drop shadow under the tile
     ctx.saveGState()
@@ -13,48 +36,53 @@ func draw(_ ctx: CGContext) {
     ctx.addPath(shape); ctx.setFillColor(CGColor(gray: 0, alpha: 1)); ctx.fillPath()
     ctx.restoreGState()
 
-    // Gradient background
+    // Eau profonde, de plus en plus sombre vers le fond
     ctx.saveGState()
     ctx.addPath(shape); ctx.clip()
-    let colors = [CGColor(red: 0.20, green: 0.84, blue: 0.86, alpha: 1),
-                  CGColor(red: 0.18, green: 0.36, blue: 0.95, alpha: 1),
-                  CGColor(red: 0.33, green: 0.18, blue: 0.78, alpha: 1)] as CFArray
-    let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 0.55, 1])!
-    ctx.drawLinearGradient(grad, start: CGPoint(x: 200, y: 924), end: CGPoint(x: 824, y: 100), options: [])
+    let sea = [CGColor(red: 0.10, green: 0.30, blue: 0.45, alpha: 1),
+               CGColor(red: 0.03, green: 0.08, blue: 0.18, alpha: 1)] as CFArray
+    ctx.drawLinearGradient(CGGradient(colorsSpace: space, colors: sea, locations: [0, 1])!,
+                           start: CGPoint(x: 512, y: 924), end: CGPoint(x: 512, y: 100), options: [])
+
+    // Hippocampe en silhouette claire, tourné vers la gauche
+    let cream = CGColor(red: 0.97, green: 0.93, blue: 0.84, alpha: 1)
+    let water = CGColor(red: 0.07, green: 0.20, blue: 0.32, alpha: 1)
+    ctx.setFillColor(cream)
+    // Corps et queue enroulée
+    tube(ctx, [(520, 720, 58), (560, 640, 60), (600, 545, 82), (600, 450, 80), (565, 365, 58), (530, 300, 42),
+               (515, 240, 31), (540, 192, 23), (588, 186, 17), (612, 222, 13), (592, 256, 10), (566, 240, 8)])
+    // Tête et museau
+    ctx.fillEllipse(in: CGRect(x: 445, y: 668, width: 150, height: 140))
+    tube(ctx, [(470, 722, 36), (410, 703, 22), (350, 690, 20), (325, 688, 24)])
+    // Couronne
+    ctx.move(to: CGPoint(x: 495, y: 790)); ctx.addLine(to: CGPoint(x: 530, y: 855)); ctx.addLine(to: CGPoint(x: 548, y: 800))
+    ctx.addLine(to: CGPoint(x: 572, y: 840)); ctx.addLine(to: CGPoint(x: 585, y: 780)); ctx.closePath(); ctx.fillPath()
+    // Nageoire dorsale, plus transparente
+    ctx.setFillColor(CGColor(red: 0.97, green: 0.93, blue: 0.84, alpha: 0.6))
+    ctx.move(to: CGPoint(x: 662, y: 585))
+    ctx.addCurve(to: CGPoint(x: 700, y: 470), control1: CGPoint(x: 760, y: 590), control2: CGPoint(x: 765, y: 485))
+    ctx.addLine(to: CGPoint(x: 668, y: 480)); ctx.closePath(); ctx.fillPath()
+    ctx.setStrokeColor(CGColor(red: 0.97, green: 0.93, blue: 0.84, alpha: 0.9)); ctx.setLineWidth(5)
+    for (x, y) in [(712.0, 568.0), (728.0, 535.0), (726.0, 500.0)] {
+        ctx.move(to: CGPoint(x: 672, y: 530)); ctx.addLine(to: CGPoint(x: x, y: y)); ctx.strokePath()
+    }
+    // Anneaux du ventre et œil, découpés dans la couleur de l'eau
+    ctx.setStrokeColor(water); ctx.setLineWidth(9); ctx.setLineCap(.round)
+    for (y, x0, x1) in [(600.0, 525.0, 575.0), (540.0, 520.0, 568.0), (480.0, 523.0, 566.0), (420.0, 532.0, 568.0)] {
+        ctx.move(to: CGPoint(x: x0, y: y)); ctx.addQuadCurve(to: CGPoint(x: x1, y: y - 14), control: CGPoint(x: (x0 + x1) / 2, y: y + 6))
+        ctx.strokePath()
+    }
+    ctx.setFillColor(water)
+    ctx.fillEllipse(in: CGRect(x: 484, y: 727, width: 30, height: 30))
+    ctx.setFillColor(cream)
+    ctx.fillEllipse(in: CGRect(x: 499, y: 743, width: 9, height: 9))
+
+    // Bulles qui montent devant le museau
+    ctx.setStrokeColor(CGColor(red: 0.97, green: 0.93, blue: 0.84, alpha: 0.8)); ctx.setLineWidth(10)
+    for (x, y, r) in [(290.0, 770.0, 20.0), (260.0, 840.0, 13.0), (318.0, 868.0, 9.0)] {
+        ctx.strokeEllipse(in: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
+    }
     ctx.restoreGState()
-
-    let white = CGColor(gray: 1, alpha: 1)
-    ctx.setLineCap(.round)
-
-    // Rotation ring: two arcs with arrowheads, turning clockwise
-    let c = CGPoint(x: s / 2, y: s / 2), r: CGFloat = 300
-    ctx.setStrokeColor(white); ctx.setFillColor(white)
-    ctx.setLineWidth(40)
-    for (from, to) in [(165.0, 30.0), (345.0, 210.0)] {
-        let a0 = CGFloat(from) * .pi / 180, a1 = CGFloat(to) * .pi / 180
-        ctx.addArc(center: c, radius: r, startAngle: a0, endAngle: a1, clockwise: true)
-        ctx.strokePath()
-        // Arrowhead at the end of the arc, pointing along the clockwise tangent
-        let tip = CGPoint(x: c.x + r * cos(a1), y: c.y + r * sin(a1))
-        let dir = CGPoint(x: sin(a1), y: -cos(a1))
-        let nrm = CGPoint(x: cos(a1), y: sin(a1))
-        let len: CGFloat = 84, half: CGFloat = 56
-        let base = CGPoint(x: tip.x - dir.x * len * 0.35, y: tip.y - dir.y * len * 0.35)
-        ctx.move(to: CGPoint(x: tip.x + dir.x * len * 0.65, y: tip.y + dir.y * len * 0.65))
-        ctx.addLine(to: CGPoint(x: base.x + nrm.x * half, y: base.y + nrm.y * half))
-        ctx.addLine(to: CGPoint(x: base.x - nrm.x * half, y: base.y - nrm.y * half))
-        ctx.closePath(); ctx.fillPath()
-    }
-
-    // Wi-Fi symbol
-    let w = CGPoint(x: s / 2, y: 410)
-    ctx.setStrokeColor(white); ctx.setFillColor(white)
-    ctx.setLineWidth(50)
-    for radius in [95.0, 175.0, 255.0] {
-        ctx.addArc(center: w, radius: CGFloat(radius), startAngle: .pi / 4, endAngle: 3 * .pi / 4, clockwise: false)
-        ctx.strokePath()
-    }
-    ctx.fillEllipse(in: CGRect(x: w.x - 36, y: w.y - 36, width: 72, height: 72))
 }
 
 let dir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()

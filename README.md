@@ -1,4 +1,4 @@
-# MacChanger
+# Hippocampe
 
 A tiny macOS app that changes your Wi-Fi (`en0`) MAC address to a random one, in one click.
 
@@ -6,14 +6,14 @@ A tiny macOS app that changes your Wi-Fi (`en0`) MAC address to a random one, in
 
 ```sh
 ./build.sh
-open MacChanger.app
+open Hippocampe.app
 ```
 
 Requires macOS 13+ and the Xcode command line tools (`swiftc`).
 
 The app icon is drawn by `icon/make-icon.swift`; run `swift icon/make-icon.swift` to regenerate `icon/AppIcon.icns`.
 
-Or download `MacChanger.zip` from the [Releases](https://github.com/sivelswhy/MacChanger/releases) page. The app is not notarized, so on first launch right-click it and choose "Open", or run `xattr -cr MacChanger.app`.
+Or download `Hippocampe.zip` from the [Releases](https://github.com/sivelswhy/MacChanger/releases) page. The app is not notarized, so on first launch right-click it and choose "Open", or run `xattr -cr Hippocampe.app`.
 
 ### Releases
 

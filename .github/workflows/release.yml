@@ -25,15 +25,15 @@ jobs:
 
       - name: Sign (ad-hoc)
         run: |
-          xattr -cr MacChanger.app
-          codesign --force --sign - MacChanger.app
+          xattr -cr Hippocampe.app
+          codesign --force --sign - Hippocampe.app
 
       - name: Package
-        run: ditto -c -k --keepParent MacChanger.app MacChanger.zip
+        run: ditto -c -k --keepParent Hippocampe.app Hippocampe.zip
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" MacChanger.zip wifi-monitor.sh \
+          gh release create "$TAG" Hippocampe.zip wifi-monitor.sh \
             --target "$GITHUB_SHA" --title "$TAG" --generate-notes
